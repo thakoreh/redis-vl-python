@@ -21,6 +21,9 @@ from typing import (
     cast,
 )
 
+import yaml
+from urllib.parse import urlparse, urlunparse
+
 import redis.exceptions
 
 # Add missing imports
@@ -105,6 +108,38 @@ from redisvl.utils.log import get_logger
 logger = get_logger(__name__)
 
 _HYBRID_SEARCH_ERROR_MESSAGE = "Hybrid search is not available in this version of redis-py. Please upgrade to redis-py >= 7.1.0."
+
+
+def _sanitize_redis_url(url: Optional[str]) -> Optional[str]:
+    """Remove password from Redis URL for safe serialization.
+
+    Args:
+        url: Redis URL that may contain a password.
+
+    Returns:
+        URL with password replaced by '***', or None if url is None.
+
+    Example:
+        >>> _sanitize_redis_url("redis://:secret@localhost:6379")
+        'redis://***@localhost:6379'
+    """
+    if not url:
+        return None
+    try:
+        parsed = urlparse(url)
+        if parsed.password:
+            # Replace password with *** but keep username if present
+            if parsed.username:
+                netloc = f"{parsed.username}:***@{parsed.hostname}"
+            else:
+                netloc = f"***@{parsed.hostname}"
+            if parsed.port:
+                netloc = f"{netloc}:{parsed.port}"
+            return urlunparse(parsed._replace(netloc=netloc))
+        return url
+    except Exception:
+        # If parsing fails, return a safe placeholder
+        return "***"
 
 
 REQUIRED_MODULES_FOR_INTROSPECTION = [
@@ -399,6 +434,60 @@ class BaseSearchIndex:
             prefix=self.prefix,
             key_separator=self.schema.index.key_separator,
         )
+
+    def to_dict(self, include_connection: bool = False) -> Dict[str, Any]:
+        """Serialize the index configuration to a dictionary.
+
+        Args:
+            include_connection (bool, optional): Whether to include connection
+                parameters. Defaults to False for security (passwords/URLs
+                are excluded by default).
+
+        Returns:
+            Dict[str, Any]: Dictionary representation of the index configuration.
+
+        Example:
+            >>> config = index.to_dict()
+            >>> new_index = SearchIndex.from_dict(config)
+        """
+        config = self.schema.to_dict()
+        if include_connection:
+            # Sanitize the Redis URL to remove password before serialization
+            sanitized_url = _sanitize_redis_url(self._redis_url)
+            if sanitized_url is not None:
+                config["_redis_url"] = sanitized_url
+            # Note: connection_kwargs may contain sensitive info
+            # Only include non-sensitive keys
+            safe_keys = {"decode_responses", "ssl", "socket_timeout", "socket_connect_timeout"}
+            connection_kwargs = getattr(self, "_connection_kwargs", {}) or {}
+            config["_connection_kwargs"] = {
+                k: v for k, v in connection_kwargs.items()
+                if k in safe_keys
+            }
+        return config
+
+    def to_yaml(self, path: str, include_connection: bool = False, overwrite: bool = True) -> None:
+        """Serialize the index configuration to a YAML file.
+
+        Args:
+            path (str): Path to write the YAML file.
+            include_connection (bool, optional): Whether to include connection
+                parameters. Defaults to False for security.
+            overwrite (bool, optional): Whether to overwrite existing file.
+                Defaults to True. If False and file exists, raises FileExistsError.
+
+        Example:
+            >>> index.to_yaml("schemas/my_index.yaml")
+
+        Raises:
+            FileExistsError: If overwrite=False and file already exists.
+        """
+        import os
+        if not overwrite and os.path.exists(path):
+            raise FileExistsError(f"File already exists: {path}")
+        config = self.to_dict(include_connection=include_connection)
+        with open(path, "w") as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
 
 class SearchIndex(BaseSearchIndex):
@@ -1293,49 +1382,6 @@ class SearchIndex(BaseSearchIndex):
         """
         index_name = name or self.schema.index.name
         return self._info(index_name, self._redis_client)
-
-    def to_dict(self, include_connection: bool = False) -> Dict[str, Any]:
-        """Serialize the index configuration to a dictionary.
-
-        Args:
-            include_connection (bool, optional): Whether to include connection
-                parameters. Defaults to False for security (passwords/URLs
-                are excluded by default).
-
-        Returns:
-            Dict[str, Any]: Dictionary representation of the index configuration.
-
-        Example:
-            >>> config = index.to_dict()
-            >>> new_index = SearchIndex.from_dict(config)
-        """
-        config = self.schema.to_dict()
-        if include_connection:
-            config["_redis_url"] = self._redis_url
-            # Note: connection_kwargs may contain sensitive info
-            # Only include non-sensitive keys
-            safe_keys = {"decode_responses", "ssl", "socket_timeout", "socket_connect_timeout"}
-            config["_connection_kwargs"] = {
-                k: v for k, v in self._connection_kwargs.items()
-                if k in safe_keys
-            }
-        return config
-
-    def to_yaml(self, path: str, include_connection: bool = False) -> None:
-        """Serialize the index configuration to a YAML file.
-
-        Args:
-            path (str): Path to write the YAML file.
-            include_connection (bool, optional): Whether to include connection
-                parameters. Defaults to False for security.
-
-        Example:
-            >>> index.to_yaml("schemas/my_index.yaml")
-        """
-        import yaml
-        config = self.to_dict(include_connection=include_connection)
-        with open(path, "w") as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
     def __enter__(self):
         return self
@@ -2293,49 +2339,6 @@ class AsyncSearchIndex(BaseSearchIndex):
         if self._redis_client is None or self._owns_redis_client is False:
             return
         sync_wrapper(self.disconnect)()
-
-    def to_dict(self, include_connection: bool = False) -> Dict[str, Any]:
-        """Serialize the index configuration to a dictionary.
-
-        Args:
-            include_connection (bool, optional): Whether to include connection
-                parameters. Defaults to False for security (passwords/URLs
-                are excluded by default).
-
-        Returns:
-            Dict[str, Any]: Dictionary representation of the index configuration.
-
-        Example:
-            >>> config = index.to_dict()
-            >>> new_index = AsyncSearchIndex.from_dict(config)
-        """
-        config = self.schema.to_dict()
-        if include_connection:
-            config["_redis_url"] = self._redis_url
-            # Note: connection_kwargs may contain sensitive info
-            # Only include non-sensitive keys
-            safe_keys = {"decode_responses", "ssl", "socket_timeout", "socket_connect_timeout"}
-            config["_connection_kwargs"] = {
-                k: v for k, v in self._connection_kwargs.items()
-                if k in safe_keys
-            }
-        return config
-
-    def to_yaml(self, path: str, include_connection: bool = False) -> None:
-        """Serialize the index configuration to a YAML file.
-
-        Args:
-            path (str): Path to write the YAML file.
-            include_connection (bool, optional): Whether to include connection
-                parameters. Defaults to False for security.
-
-        Example:
-            >>> await index.to_yaml("schemas/my_index.yaml")
-        """
-        import yaml
-        config = self.to_dict(include_connection=include_connection)
-        with open(path, "w") as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
     async def __aenter__(self):
         return self

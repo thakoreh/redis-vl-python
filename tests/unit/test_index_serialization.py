@@ -59,6 +59,46 @@ class TestSearchIndexSerialization:
         assert config["_connection_kwargs"]["ssl"] is True
         assert config["_connection_kwargs"]["socket_timeout"] == 30
 
+    def test_to_dict_sanitizes_password(self, sample_schema):
+        """Test to_dict() sanitizes passwords from redis_url."""
+        index = SearchIndex(
+            schema=sample_schema,
+            redis_url="redis://:mysecretpassword@localhost:6379",
+        )
+        
+        config = index.to_dict(include_connection=True)
+        
+        assert "_redis_url" in config
+        # Password should be sanitized
+        assert "mysecretpassword" not in config["_redis_url"]
+        assert "***" in config["_redis_url"]
+
+    def test_to_dict_sanitizes_password_with_username(self, sample_schema):
+        """Test to_dict() sanitizes passwords but keeps username."""
+        index = SearchIndex(
+            schema=sample_schema,
+            redis_url="redis://user:pass@localhost:6379",
+        )
+        
+        config = index.to_dict(include_connection=True)
+        
+        assert "_redis_url" in config
+        assert "pass" not in config["_redis_url"]
+        assert "user" in config["_redis_url"]
+        assert "***" in config["_redis_url"]
+
+    def test_to_dict_none_url_omitted(self, sample_schema):
+        """Test to_dict() omits _redis_url when it's None."""
+        index = SearchIndex(
+            schema=sample_schema,
+            redis_url=None,
+        )
+        
+        config = index.to_dict(include_connection=True)
+        
+        # _redis_url should be omitted, not set to None
+        assert "_redis_url" not in config
+
     def test_to_yaml_without_connection(self, sample_schema):
         """Test to_yaml() writes schema to YAML file."""
         index = SearchIndex(schema=sample_schema)
@@ -91,6 +131,35 @@ class TestSearchIndexSerialization:
             
             content = Path(path).read_text()
             assert "_redis_url" in content
+        finally:
+            Path(path).unlink()
+
+    def test_to_yaml_overwrite_false_raises(self, sample_schema):
+        """Test to_yaml() raises FileExistsError when overwrite=False."""
+        index = SearchIndex(schema=sample_schema)
+        
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            path = f.name
+        
+        try:
+            with pytest.raises(FileExistsError):
+                index.to_yaml(path, overwrite=False)
+        finally:
+            Path(path).unlink()
+
+    def test_to_yaml_overwrite_true(self, sample_schema):
+        """Test to_yaml() overwrites when overwrite=True."""
+        index = SearchIndex(schema=sample_schema)
+        
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            path = f.name
+        
+        try:
+            # Should not raise
+            index.to_yaml(path, overwrite=True)
+            
+            content = Path(path).read_text()
+            assert "test_index" in content
         finally:
             Path(path).unlink()
 
@@ -138,6 +207,31 @@ class TestAsyncSearchIndexSerialization:
         # Password should not be included (not in safe_keys)
         assert "password" not in config.get("_connection_kwargs", {})
 
+    def test_to_dict_sanitizes_password(self, sample_schema):
+        """Test to_dict() sanitizes passwords from redis_url."""
+        index = AsyncSearchIndex(
+            schema=sample_schema,
+            redis_url="redis://:secret@localhost:6379",
+        )
+        
+        config = index.to_dict(include_connection=True)
+        
+        assert "_redis_url" in config
+        assert "secret" not in config["_redis_url"]
+        assert "***" in config["_redis_url"]
+
+    def test_to_dict_none_url_omitted(self, sample_schema):
+        """Test to_dict() omits _redis_url when it's None."""
+        index = AsyncSearchIndex(
+            schema=sample_schema,
+            redis_url=None,
+        )
+        
+        config = index.to_dict(include_connection=True)
+        
+        # _redis_url should be omitted, not set to None
+        assert "_redis_url" not in config
+
     def test_to_yaml(self, sample_schema):
         """Test to_yaml() writes schema to YAML file."""
         index = AsyncSearchIndex(schema=sample_schema)
@@ -150,6 +244,19 @@ class TestAsyncSearchIndexSerialization:
             
             content = Path(path).read_text()
             assert "test_index" in content
+        finally:
+            Path(path).unlink()
+
+    def test_to_yaml_overwrite_false_raises(self, sample_schema):
+        """Test to_yaml() raises FileExistsError when overwrite=False."""
+        index = AsyncSearchIndex(schema=sample_schema)
+        
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            path = f.name
+        
+        try:
+            with pytest.raises(FileExistsError):
+                index.to_yaml(path, overwrite=False)
         finally:
             Path(path).unlink()
 
