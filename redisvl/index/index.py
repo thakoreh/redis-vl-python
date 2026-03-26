@@ -356,7 +356,7 @@ class BaseSearchIndex:
         path_obj = Path(schema_path)
         try:
             resolved_path = path_obj.resolve()
-        except Exception as exc:
+        except OSError as exc:
             raise ValueError(f"Invalid schema path: {schema_path}") from exc
         try:
             with resolved_path.open() as f:
@@ -426,7 +426,11 @@ class BaseSearchIndex:
         # empty-string passwords).  Username-only URLs like
         # ``redis://user@host:6379`` are left unchanged.
         if parsed.password is not None:
-            host_info = parsed.hostname or ""
+            hostname = parsed.hostname or ""
+            # Re-add brackets for IPv6 addresses stripped by urlparse
+            if ":" in hostname:
+                hostname = f"[{hostname}]"
+            host_info = hostname
             if parsed.port:
                 host_info += f":{parsed.port}"
             user_part = f"{parsed.username}:" if parsed.username is not None else ":"

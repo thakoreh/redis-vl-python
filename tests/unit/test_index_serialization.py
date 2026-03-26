@@ -76,6 +76,12 @@ class TestToDict:
         d = idx.to_dict(include_connection=True)
         assert d["_redis_url"] == "redis://readonly@localhost:6379"
 
+    def test_include_connection_ipv6_url(self):
+        """IPv6 addresses are preserved with brackets after sanitization."""
+        idx = _make_index(redis_url="redis://:secret@[::1]:6379")
+        d = idx.to_dict(include_connection=True)
+        assert d["_redis_url"] == "redis://:****@[::1]:6379"
+
     def test_include_connection_no_url(self):
         """When initialized with a client, _redis_url is None — omit it."""
         idx = _make_index()
@@ -88,8 +94,9 @@ class TestToDict:
             connection_kwargs={"password": "s3cret", "ssl_cert_reqs": "required"},
         )
         d = idx.to_dict(include_connection=True)
-        # password should NOT leak
+        # password should NOT leak (check values, not just keys)
         assert "s3cret" not in d["_connection_kwargs"]
+        assert "s3cret" not in d["_connection_kwargs"].values()
         assert d["_connection_kwargs"] == {"ssl_cert_reqs": "required"}
 
     def test_async_index_to_dict(self):
