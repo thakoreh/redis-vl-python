@@ -343,8 +343,10 @@ def test_text_query_word_weights():
         text_weights={"alpha": 2, "delta": 0.555, "gamma": 0.95},
     )
 
-    # Check query components with structural guarantees,
-    # not exact token ordering (which is non-deterministic).
+    # Check query components with structural guarantees.
+    # Note: _tokenize_and_escape_query preserves input token order,
+    # but we still avoid an exact-string assertion to keep the test
+    # resilient to formatting changes (e.g. whitespace).
     query_str = str(query)
 
     # Description clause is properly delimited
@@ -359,14 +361,12 @@ def test_text_query_word_weights():
     # alpha appears twice and both occurrences are weighted
     alpha_weighted = "alpha=>{$weight:2}"
     assert desc_clause.count(alpha_weighted) == 2
-    # Ensure no unweighted 'alpha' tokens slipped through
-    idx = 0
-    while True:
-        idx = desc_clause.find("alpha", idx)
-        if idx == -1:
-            break
-        assert desc_clause.startswith(alpha_weighted, idx)
-        idx += len("alpha")
+    # Ensure no unweighted 'alpha' tokens slipped through by
+    # checking at the token level (split on " | ").
+    tokens = [t.strip() for t in desc_clause.split(" | ")]
+    alpha_tokens = [t for t in tokens if t == "alpha" or t.startswith("alpha=>")]
+    assert len(alpha_tokens) == 2
+    assert all(t == alpha_weighted for t in alpha_tokens)
 
     # Unweighted terms are present
     for term in ["query", "string", "bravo", "tango"]:
